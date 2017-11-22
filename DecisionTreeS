@@ -1,0 +1,121 @@
+from math import log
+import operator
+
+def createDataSet():   #创建数据集
+    dataSet = [[1, 1, 'yes'],
+               [1, 1, 'yes'],
+               [1, 0, 'no'],
+               [0, 1, 'no'],
+               [0, 1, 'no']]
+    labels = ['no surfacing','flippers']
+    #change to discrete values
+    return dataSet, labels
+
+def calcShannonEnt(dataSet):    #计算信息熵
+    numEntries = len(dataSet)   #计算dataSet中有多少个实体
+    labelCounts = {}           #字典
+    for featVec in dataSet:    #the the number of unique elements and their occurance
+        currentLabel = featVec[-1]     #列表中最后一项，分类的标签
+        if currentLabel not in labelCounts.keys(): labelCounts[currentLabel] = 0
+        labelCounts[currentLabel] += 1
+    shannonEnt = 0.0
+    for key in labelCounts:          #这里是计算信息熵的核心代码
+        prob = float(labelCounts[key])/numEntries   #比例
+        shannonEnt -= prob * log(prob,2) #log base 2
+    return shannonEnt    #返回信息熵
+    
+def splitDataSet(dataSet, axis, value):   #划分数据，axis表示第几个特征，value表示具体的特征值，每调用一次，就减少一个特征列
+    retDataSet = []
+    for featVec in dataSet:
+        if featVec[axis] == value:
+            reducedFeatVec = featVec[:axis]     #chop out axis used for splitting
+            reducedFeatVec.extend(featVec[axis+1:])
+            retDataSet.append(reducedFeatVec)
+    return retDataSet
+    
+def chooseBestFeatureToSplit(dataSet):   #这部分是计算信息增益的
+    numFeatures = len(dataSet[0]) - 1      #the last column is used for the labels
+    baseEntropy = calcShannonEnt(dataSet)  #计算信息熵
+    bestInfoGain = 0.0; bestFeature = -1   #
+    for i in range(numFeatures):        #iterate over all the features
+        featList = [example[i] for example in dataSet] #对每一列（每个特征值）依次计算条件熵
+        uniqueVals = set(featList)       #get a set of unique values（去除重复属性值,set方法）
+        newEntropy = 0.0
+        for value in uniqueVals:    #这里是计算条件熵的核心代码
+            subDataSet = splitDataSet(dataSet, i, value)
+            prob = len(subDataSet)/float(len(dataSet))
+            newEntropy += prob * calcShannonEnt(subDataSet)     
+        infoGain = baseEntropy - newEntropy     #信息增益=信息熵-条件熵
+        if (infoGain > bestInfoGain):       #compare this to the best gain so far
+            bestInfoGain = infoGain         #if better than current best, set to best
+            bestFeature = i
+    return bestFeature                      #r选出一个最大的信息增益，信息增益越大，代表分类能减少的不确定性就越大，基于这个原理
+
+def majorityCnt(classList):   #这段代码的主要作用是少数服从多数，主要是用于分类属性已经用完，但是在一个节点中，有不同类别的数据，就采取少妇服从多数的原则
+    classCount={}
+    for vote in classList:
+        if vote not in classCount.keys(): classCount[vote] = 0
+        classCount[vote] += 1
+    sortedClassCount = sorted(classCount.items(), key=operator.itemgetter(1), reverse=True)  #按照每个键的值从大到小排列
+    return sortedClassCount[0][0]    #返回频率最高的类别
+
+
+#递归的创建一颗决策树，核心代码
+def createTree(dataSet,labels):
+    classList = [example[-1] for example in dataSet]   #最后一列是分类标签
+    if classList.count(classList[0]) == len(classList):     #如果剩下的样本全部都是属于一个类别，则分类完成，程序返回
+        return classList[0]
+    if len(dataSet[0]) == 1:       #如果属性值已经用完，但是样本的类别是多个，则采用少数服从多数来定义该叶子节点的属性值
+        return majorityCnt(classList)
+    bestFeat = chooseBestFeatureToSplit(dataSet)   #选择一个最大的信息增益，因为它所能带来的收益最大
+    bestFeatLabel = labels[bestFeat]    #提取出信息增益最大的属性
+    myTree = {bestFeatLabel:{}}   #创建一个字典
+    del(labels[bestFeat])      #删除一个标签列
+    featValues = [example[bestFeat] for example in dataSet]   #列出该属性下所有的不同属性值
+    uniqueVals = set(featValues)   #取唯一性
+    for value in uniqueVals:  #递归调用
+        subLabels = labels[:]
+        myTree[bestFeatLabel][value] = createTree(splitDataSet(dataSet, bestFeat, value),subLabels)
+    return myTree      #返回构造好的决策树
+
+
+#测试该决策树，也就是现在就可以用该决策树进行分类,递归的进行
+def classify(inputTree,featLabels,testVec):
+    firstStr = list(inputTree.keys())[0]  #找到该决策树顶层的属性值
+    secondDict = inputTree[firstStr]  #找到该属性值所对应的字典
+    featIndex = featLabels.index(firstStr)   #找到该属性值所对应的索引，因为输入的是乱的
+    key = testVec[featIndex]   #找到该索引所对应的值，一个键
+    valueOfFeat = secondDict[key]  #找到对应该键的值
+    if isinstance(valueOfFeat, dict):   #如果对应的值是键，则继续递归调用下去
+        classLabel = classify(valueOfFeat, featLabels, testVec)
+    else: classLabel = valueOfFeat  #如果是值，则直接返回，分类成功且结束
+    return classLabel  #返回分类的结果，即判定其是什么类型的，分类结束
+
+
+#序列化存储在磁盘上，这样的好处是，不用每次分类的时候都重新构造一颗决策树，减少了时间
+def storeTree(inputTree,filename):
+    import pickle
+    fw = open(filename,'w')
+    pickle.dump(inputTree,fw)
+    fw.close()
+
+#从磁盘中去取出对象，可以直接用这颗决策树
+def grabTree(filename):
+    import pickle
+    fr = open(filename)
+    return pickle.load(fr)
+
+
+if __name__ == '__main__':   #main方法，供测试用
+
+
+    dataSet,labels=createDataSet()
+    # myTree=createTree(dataSet,['no surfacing','flippers'])
+    # print (classify(myTree,labels,[0,1]))
+    print (chooseBestFeatureToSplit(dataSet)
+    
+    
+    
+关于决策树的构造过程中，用到了信息熵，条件熵，信息增益。关于它们的计算，可以谷歌。另外，信息增益值越大，表示分类时能够减少的不确定性程度越大，
+因此，每次分类时都会选择信息增益最大的属性值进行划分。
+    
